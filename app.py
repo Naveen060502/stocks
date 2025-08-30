@@ -7,13 +7,13 @@ import seaborn as sns
 import plotly.express as px
 from utils import *
 
-# ---------------- Auto Refresh every 30 mins ----------------
+# ---------------- Auto Refresh ----------------
 st_autorefresh(interval=30*60*1000, key="refresh")
 
 st.title("📊 Professional Stock Portfolio Dashboard")
 
 # ---------------- Sidebar Inputs ----------------
-st.sidebar.subheader("Stocks & Alert Settings")
+st.sidebar.subheader("Stocks & Alerts Settings")
 selected_stocks = st.sidebar.multiselect(
     "Select Stocks", ["TCS.NS","INFY.NS","RELIANCE.NS","HDFCBANK.NS"], default=["TCS.NS","INFY.NS"]
 )
@@ -96,8 +96,13 @@ if len(selected_stocks) > 0:
     )
     stock_alerts = check_stock_alerts(live_data, stock_drop, stock_jump)
     all_alerts = portfolio_alerts + stock_alerts
+
     if all_alerts:
+        alert_message = "\n".join(all_alerts)
         for alert in all_alerts:
             st.error(alert)
+        # Send notifications
+        send_telegram_alert(alert_message)
+        send_email_alert("Stock/Portfolio Alerts 🚨", alert_message)
     else:
         st.success("✅ No alerts triggered.")
