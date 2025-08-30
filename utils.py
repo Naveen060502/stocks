@@ -9,35 +9,66 @@ import streamlit as st
 
 # ----------------- Fetch Stock Data -----------------
 def fetch_stock_data(stock, start="2020-01-01", end="2025-01-01"):
-    data = yf.download(stock, start=start, end=end, group_by='ticker', auto_adjust=True)
-    # Handle multi-index vs single index
+    data = yf.download(stock, start=start, end=end, auto_adjust=True)
+    
+    # If data is empty
+    if data.empty:
+        print(f"No data returned for {stock}. Skipping...")
+        return pd.Series(dtype=float)
+    
+    # MultiIndex columns (happens with multiple tickers)
     if isinstance(data.columns, pd.MultiIndex):
-        if stock in data.columns.levels[0]:
+        try:
             data = data[stock]["Adj Close"].dropna()
-        else:
-            data = data["Adj Close"].dropna()
+        except:
+            # fallback if multi-index does not contain the stock
+            if "Adj Close" in data.columns.get_level_values(1):
+                data = data["Adj Close"].dropna()
+            else:
+                print(f"No 'Adj Close' for {stock}. Skipping...")
+                return pd.Series(dtype=float)
     else:
-        data = data["Adj Close"].dropna()
+        # Single-level columns
+        if "Adj Close" in data.columns:
+            data = data["Adj Close"].dropna()
+        else:
+            print(f"No 'Adj Close' column for {stock}. Skipping...")
+            return pd.Series(dtype=float)
+    
     return data
 
 def fetch_live_data(stocks):
-    data = yf.download(stocks, period="2d", interval="15m", group_by='ticker', auto_adjust=True)
+    data = yf.download(stocks, period="2d", interval="15m", auto_adjust=True)
+    if data.empty:
+        return pd.DataFrame()
+    
     if isinstance(data.columns, pd.MultiIndex):
         temp = pd.DataFrame()
         for stock in stocks:
             try:
                 temp[stock] = data[stock]["Adj Close"]
             except:
-                temp[stock] = data.iloc[:,0]  # fallback
+                if "Adj Close" in data.columns.get_level_values(1):
+                    temp[stock] = data["Adj Close"].iloc[:,0]
+                else:
+                    temp[stock] = pd.Series(dtype=float)
         data = temp
     else:
-        data = data[stocks]
-    data = data.groupby(data.index.date).last()
+        if "Adj Close" in data.columns:
+            data = data[stocks]
+        else:
+            data = pd.DataFrame()
+    
+    if not data.empty:
+        data = data.groupby(data.index.date).last()
     return data
 
 # ----------------- Portfolio Backtest -----------------
 def backtest_with_trades(stock, start="2020-01-01", end="2025-01-01"):
     data = fetch_stock_data(stock, start, end)
+    if data.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    
     df = pd.DataFrame(index=data.index)
     df["Close"] = data
     df["Strategy_Return"] = df["Close"].pct_change()
@@ -50,13 +81,21 @@ def portfolio_backtest(stocks, start="2020-01-01", end="2025-01-01"):
     trade_logs = {}
     for stock in stocks:
         df, log = backtest_with_trades(stock, start, end)
+        if df.empty:
+            continue  # skip this stock
         portfolio[stock] = df["Cumulative_Strategy"]
         trade_logs[stock] = log
+    if portfolio.empty:
+        st.error("No valid stock data found for selected tickers.")
+        return pd.DataFrame(), {}
     portfolio["Portfolio"] = portfolio.mean(axis=1)
     return portfolio, trade_logs
 
 # ----------------- Portfolio Metrics -----------------
 def calculate_portfolio_metrics(portfolio, risk_free_rate=0.05):
+    if portfolio.empty:
+        return {"CAGR %":0,"Sharpe":0,"Max DD %":0,"Total Return %":0,"Volatility":0}
+    
     cum_returns = portfolio["Portfolio"]
     start_value = cum_returns.iloc[0]
     end_value = cum_returns.iloc[-1]
@@ -86,6 +125,8 @@ def check_portfolio_alerts(portfolio_return, sharpe_ratio, volatility,
 
 def check_stock_alerts(data, stock_drop, stock_jump):
     alerts = []
+    if data.empty or len(data) < 2:
+        return alerts
     latest = data.iloc[-1]
     prev = data.iloc[-2]
     pct_changes = (latest - prev) / prev
@@ -100,9 +141,13 @@ def check_stock_alerts(data, stock_drop, stock_jump):
 def optimize_portfolio(stocks, start="2020-01-01", end="2025-01-01", risk_free_rate=0.05):
     data = pd.DataFrame()
     for stock in stocks:
-        data[stock] = fetch_stock_data(stock, start, end)
+        s = fetch_stock_data(stock, start, end)
+        if not s.empty:
+            data[stock] = s
+    if data.empty:
+        return [],0,0,0
     returns = data.pct_change().dropna()
-    n = len(stocks)
+    n = len(data.columns)
 
     def portfolio_metrics(weights):
         weights = np.array(weights)
@@ -127,7 +172,12 @@ def optimize_portfolio(stocks, start="2020-01-01", end="2025-01-01", risk_free_r
 def simulate_portfolio(stocks, weights, start="2020-01-01", end="2025-01-01"):
     data = pd.DataFrame()
     for stock in stocks:
-        data[stock] = fetch_stock_data(stock, start, end)
+        s = fetch_stock_data(stock, start, end)
+        if not s.empty:
+            data[stock] = s
+    if data.empty:
+        return 0,0,0,pd.DataFrame()
+    
     weights = np.array(weights)
     returns = data.pct_change().dropna()
     port_return = np.sum(weights * returns.mean()) * 252
@@ -140,9 +190,14 @@ def simulate_portfolio(stocks, weights, start="2020-01-01", end="2025-01-01"):
 def monte_carlo_simulation(stocks, num_portfolios=3000, start="2020-01-01", end="2025-01-01"):
     data = pd.DataFrame()
     for stock in stocks:
-        data[stock] = fetch_stock_data(stock, start, end)
+        s = fetch_stock_data(stock, start, end)
+        if not s.empty:
+            data[stock] = s
+    if data.empty:
+        return pd.DataFrame()
+    
     returns = data.pct_change().dropna()
-    n = len(stocks)
+    n = len(data.columns)
     results = []
     for _ in range(num_portfolios):
         weights = np.random.random(n)
