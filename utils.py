@@ -1,14 +1,41 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import requests
 
-# ----------------- Backtest / Portfolio -----------------
+# ----------------- Fetch Stock Data -----------------
+def fetch_stock_data(stock, start="2020-01-01", end="2025-01-01"):
+    data = yf.download(stock, start=start, end=end, group_by='ticker', auto_adjust=True)
+    # Handle multi-index vs single index
+    if isinstance(data.columns, pd.MultiIndex):
+        if stock in data.columns.levels[0]:
+            data = data[stock]["Adj Close"].dropna()
+        else:
+            data = data["Adj Close"].dropna()
+    else:
+        data = data["Adj Close"].dropna()
+    return data
+
+def fetch_live_data(stocks):
+    data = yf.download(stocks, period="2d", interval="15m", group_by='ticker', auto_adjust=True)
+    if isinstance(data.columns, pd.MultiIndex):
+        temp = pd.DataFrame()
+        for stock in stocks:
+            try:
+                temp[stock] = data[stock]["Adj Close"]
+            except:
+                temp[stock] = data.iloc[:,0]  # fallback
+        data = temp
+    else:
+        data = data[stocks]
+    data = data.groupby(data.index.date).last()
+    return data
+
+# ----------------- Portfolio Backtest -----------------
 def backtest_with_trades(stock, start="2020-01-01", end="2025-01-01"):
-    data = yf.download(stock, start=start, end=end)["Adj Close"].dropna()
+    data = fetch_stock_data(stock, start, end)
     df = pd.DataFrame(index=data.index)
     df["Close"] = data
-    df["Strategy_Return"] = df["Close"].pct_change()  # Simple strategy placeholder
+    df["Strategy_Return"] = df["Close"].pct_change()
     df["Cumulative_Strategy"] = (1 + df["Strategy_Return"]).cumprod()
     trade_log = pd.DataFrame(columns=["Entry", "Exit", "P&L %", "Reason"])
     return df, trade_log
@@ -23,7 +50,7 @@ def portfolio_backtest(stocks, start="2020-01-01", end="2025-01-01"):
     portfolio["Portfolio"] = portfolio.mean(axis=1)
     return portfolio, trade_logs
 
-# ----------------- Metrics -----------------
+# ----------------- Portfolio Metrics -----------------
 def calculate_portfolio_metrics(portfolio, risk_free_rate=0.05):
     cum_returns = portfolio["Portfolio"]
     start_value = cum_returns.iloc[0]
@@ -37,13 +64,14 @@ def calculate_portfolio_metrics(portfolio, risk_free_rate=0.05):
     drawdown = (cum_returns - peak) / peak
     max_dd = drawdown.min() * 100
     total_return = (end_value - 1) * 100
-    return {"CAGR %": round(cagr,2), "Sharpe": round(sharpe,2), "Max DD %": round(max_dd,2), "Total Return %": round(total_return,2)}
+    volatility = daily_returns.std() * np.sqrt(252)
+    return {"CAGR %": round(cagr,2), "Sharpe": round(sharpe,2), "Max DD %": round(max_dd,2), "Total Return %": round(total_return,2), "Volatility": round(volatility,2)}
 
 # ----------------- Alerts -----------------
 def check_portfolio_alerts(portfolio_return, sharpe_ratio, volatility,
                            min_sharpe, max_volatility, portfolio_return_alert):
     alerts = []
-    if portfolio_return < portfolio_return_alert / 100:
+    if portfolio_return < portfolio_return_alert:
         alerts.append(f"⚠️ Portfolio return below {portfolio_return_alert}%")
     if sharpe_ratio < min_sharpe:
         alerts.append(f"⚠️ Sharpe ratio below {min_sharpe}")
@@ -63,8 +91,62 @@ def check_stock_alerts(data, stock_drop, stock_jump):
             alerts.append(f"🚀 {stock} jumped {change:.2%} today.")
     return alerts
 
-# ----------------- Live Data -----------------
-def fetch_live_data(stocks):
-    data = yf.download(stocks, period="2d", interval="15m")["Adj Close"]
-    data = data.groupby(data.index.date).last()
-    return data
+# ----------------- Portfolio Optimizer -----------------
+from scipy.optimize import minimize
+
+def optimize_portfolio(stocks, start="2020-01-01", end="2025-01-01", risk_free_rate=0.05):
+    data = pd.DataFrame()
+    for stock in stocks:
+        data[stock] = fetch_stock_data(stock, start, end)
+    returns = data.pct_change().dropna()
+    n = len(stocks)
+
+    def portfolio_metrics(weights):
+        weights = np.array(weights)
+        port_return = np.sum(weights * returns.mean()) * 252
+        port_vol = np.sqrt(np.dot(weights.T, np.dot(returns.cov()*252, weights)))
+        sharpe = (port_return - risk_free_rate)/port_vol
+        return port_return, port_vol, sharpe
+
+    def neg_sharpe(weights):
+        return -portfolio_metrics(weights)[2]
+
+    constraints = ({'type':'eq', 'fun': lambda w: np.sum(w)-1})
+    bounds = tuple((0,1) for _ in range(n))
+    init_guess = np.array(n * [1/n])
+
+    result = minimize(neg_sharpe, init_guess, method="SLSQP", bounds=bounds, constraints=constraints)
+    weights = result.x
+    ret, vol, sharpe = portfolio_metrics(weights)
+    return weights, ret, vol, sharpe
+
+# ----------------- Portfolio Simulation -----------------
+def simulate_portfolio(stocks, weights, start="2020-01-01", end="2025-01-01"):
+    data = pd.DataFrame()
+    for stock in stocks:
+        data[stock] = fetch_stock_data(stock, start, end)
+    weights = np.array(weights)
+    returns = data.pct_change().dropna()
+    port_return = np.sum(weights * returns.mean()) * 252
+    port_vol = np.sqrt(np.dot(weights.T, np.dot(returns.cov()*252, weights)))
+    sharpe = (port_return - 0.05)/port_vol
+    growth = (1 + (returns * weights).sum(axis=1)).cumprod()
+    return port_return, port_vol, sharpe, growth
+
+# ----------------- Monte Carlo -----------------
+def monte_carlo_simulation(stocks, num_portfolios=3000, start="2020-01-01", end="2025-01-01"):
+    data = pd.DataFrame()
+    for stock in stocks:
+        data[stock] = fetch_stock_data(stock, start, end)
+    returns = data.pct_change().dropna()
+    n = len(stocks)
+    results = []
+    for _ in range(num_portfolios):
+        weights = np.random.random(n)
+        weights /= np.sum(weights)
+        port_return = np.sum(weights * returns.mean()) * 252
+        port_vol = np.sqrt(np.dot(weights.T, np.dot(returns.cov()*252, weights)))
+        sharpe = (port_return - 0.05)/port_vol
+        results.append([port_return, port_vol, sharpe, weights])
+    df = pd.DataFrame(results, columns=["Return","Volatility","Sharpe","Weights"])
+    return df
