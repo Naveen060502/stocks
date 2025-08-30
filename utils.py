@@ -1,6 +1,11 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from scipy.optimize import minimize
+import requests
+import smtplib
+from email.mime.text import MIMEText
+import streamlit as st
 
 # ----------------- Fetch Stock Data -----------------
 def fetch_stock_data(stock, start="2020-01-01", end="2025-01-01"):
@@ -92,8 +97,6 @@ def check_stock_alerts(data, stock_drop, stock_jump):
     return alerts
 
 # ----------------- Portfolio Optimizer -----------------
-from scipy.optimize import minimize
-
 def optimize_portfolio(stocks, start="2020-01-01", end="2025-01-01", risk_free_rate=0.05):
     data = pd.DataFrame()
     for stock in stocks:
@@ -120,7 +123,7 @@ def optimize_portfolio(stocks, start="2020-01-01", end="2025-01-01", risk_free_r
     ret, vol, sharpe = portfolio_metrics(weights)
     return weights, ret, vol, sharpe
 
-# ----------------- Portfolio Simulation -----------------
+# ----------------- Portfolio Simulator -----------------
 def simulate_portfolio(stocks, weights, start="2020-01-01", end="2025-01-01"):
     data = pd.DataFrame()
     for stock in stocks:
@@ -150,3 +153,31 @@ def monte_carlo_simulation(stocks, num_portfolios=3000, start="2020-01-01", end=
         results.append([port_return, port_vol, sharpe, weights])
     df = pd.DataFrame(results, columns=["Return","Volatility","Sharpe","Weights"])
     return df
+
+# ----------------- Notifications -----------------
+def send_telegram_alert(message):
+    try:
+        bot_token = st.secrets["telegram"]["bot_token"]
+        chat_id = st.secrets["telegram"]["chat_id"]
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": message}
+        requests.post(url, data=payload)
+    except Exception as e:
+        print("Telegram alert failed:", e)
+
+def send_email_alert(subject, message):
+    try:
+        sender = st.secrets["email"]["sender"]
+        password = st.secrets["email"]["password"]
+        receiver = st.secrets["email"]["receiver"]
+
+        msg = MIMEText(message)
+        msg['Subject'] = subject
+        msg['From'] = sender
+        msg['To'] = receiver
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(sender, password)
+            server.sendmail(sender, receiver, msg.as_string())
+    except Exception as e:
+        print("Email alert failed:", e)
