@@ -8,14 +8,22 @@ import plotly.express as px
 from utils import *
 
 # ---------------- Auto Refresh ----------------
-st_autorefresh(interval=30*60*1000, key="refresh")
+st_autorefresh(interval=30*60*1000, key="refresh")  # refresh every 30 minutes
 
 st.title("📊 Professional Stock Portfolio Dashboard")
 
 # ---------------- Sidebar Inputs ----------------
 st.sidebar.subheader("Stocks & Alerts Settings")
+
+# ✅ Pre-verified NSE tickers (known to work with yfinance)
+VALID_TICKERS = [
+    "RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "TCS.NS",
+    "HINDUNILVR.NS", "ICICIBANK.NS", "KOTAKBANK.NS", "LT.NS",
+    "AXISBANK.NS", "BAJFINANCE.NS"
+]
+
 selected_stocks = st.sidebar.multiselect(
-    "Select Stocks", ["TCS.NS","INFY.NS","RELIANCE.NS","HDFCBANK.NS"], default=["TCS.NS","INFY.NS"]
+    "Select Stocks", VALID_TICKERS, default=["RELIANCE.NS", "HDFCBANK.NS"]
 )
 
 # Portfolio alert sliders
@@ -27,9 +35,10 @@ portfolio_return_alert = st.sidebar.slider("Min Portfolio Return Alert (%)", -50
 stock_drop = st.sidebar.slider("Stock Drop Alert (%)", -20.0, 0.0, -5.0, 0.5)
 stock_jump = st.sidebar.slider("Stock Jump Alert (%)", 0.0, 20.0, 5.0, 0.5)
 
-# ---------------- Portfolio Backtest ----------------
+# ---------------- Fetch & Backtest Portfolio ----------------
 st.subheader("📈 Portfolio Backtest & Metrics")
 
+# Fetch & backtest only tickers that return data
 portfolio, trade_logs = portfolio_backtest(selected_stocks)
 
 if portfolio.empty:
